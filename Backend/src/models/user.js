@@ -19,7 +19,7 @@ const userSchema = new Schema({
         lowercase:true,
         trim:true
     },
-    fullname:{
+    fullName:{
         type:String,
         required:true,
         trim:true,
@@ -53,6 +53,7 @@ userSchema.pre("save",async function(next){
         next();
     }
     this.password = await bcrypt.hash(this.password,10);
+    console.log(this.password);
     next();
 })
 
@@ -67,7 +68,6 @@ userSchema.methods.generateToken = function(){
             email:this.email,
             username:this.username,
             fullname:this.fullname
-
         },process.env.ACESS_TOKEN,process.env.ACESS_TOKEN_EXPIRY);
 }
 
