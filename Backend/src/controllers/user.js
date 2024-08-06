@@ -1,13 +1,25 @@
 import asyncHandler from "../utils/asyncHandler.js";
-import apierror from "../utils/apierror.js";
-import {User} from "../models/user.js";
+import apierror from "../utils/ApiError.js";
+import User from "../models/User.js";
 import {uploadoncloudinary} from "../utils/cloudinary.js";
 import ApiResponse from "../utils/ApiResponse.js";
+import jwt from "jsonwebtoken";
+
+
+const generateRefreshTokenandaccesstoken  = async (userid) => {
+    const user = await User.findById(userid);
+    const refreshToken = user.generateRefreshToken();
+    const accessToken = user.generateAccessToken();
+    user.refreshToken = refreshToken; 
+    await user.save({validateBeforeSave:false}); 
+    return {refreshToken,accessToken};
+
+}
 
 const register = asyncHandler(async (req, res) => {
-    console.log(req.body);
+    // console.log(req.body);
     const{fullName,email,username,password}  = req.body;
-    console.log(fullName,email,username,password);  
+    // console.log(fullName,email,username,password);  
 
     if([fullName,email,username,password].some((field) => field?.trim()==='')){
         throw new apierror(400,"Please fill all the fields");
@@ -58,4 +70,104 @@ const register = asyncHandler(async (req, res) => {
     return res.status(201).json(new ApiResponse(200,"User registered successfully",{user:saveduser}));  
 })
 
-export default register ;
+const loginuser = asyncHandler(async (req, res) => {
+    const{email,username,password}  = req.body;
+    if(!email && !username ){
+        throw new apierror(400,"Please provide email and username");
+    }
+
+    const user = await User.findOne({ $or: [{ email }, { username }]});
+
+    if(!user){
+        throw new apierror(404,"User Does not exist");
+    }
+
+    const ismatch = await user.passwordCheck(password);    
+
+    if(!ismatch){
+        throw new apierror(401,"Password is incorrect");
+    }
+    
+    const {refreshToken,accessToken} = await generateRefreshTokenandaccesstoken(user._id);
+
+    const loggedinuser = await User.findOne({ $or: [{ email }, { username }]}).select("-password -refreshToken");
+
+    const options = {
+        httpOnly:true,
+        secure:true
+    }
+
+    return res
+    .status(200)
+    .cookie("refreshToken",refreshToken,options)
+    .cookie("accessToken",accessToken,options)
+    .json(new ApiResponse(200,{user:loggedinuser,accessToken,refreshToken},"User logged in successfully"));
+
+})
+
+const logoutuser = asyncHandler(async (req, res) => {
+    await User.findByIdAndUpdate(
+        req.user._id,
+        {
+            $set:{
+                refreshToken:undefined
+            }
+        },
+        {
+            new:true
+        },
+    );
+    
+    const options = {
+        httpOnly:true,
+        secure:true
+    }
+
+    return res.
+    status(200)
+    .clearCookie("refreshToken",options)
+    .clearCookie("accessToken",options)
+    .json(new ApiResponse(200,{},"User logged out successfully"));
+    
+});
+
+const refreshToken = asyncHandler(async (req, res) => {
+    const incomingrefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    if(!incomingrefreshToken){
+        throw new apierror(401,"Unauthorized Request");
+    }
+
+    try {
+        const decoded = jwt.verify(incomingrefreshToken,process.env.REFRESH_TOKEN_SECRET);
+        // console.log(decoded);
+        const user = await User.findById(decoded?.id);
+        // console.log(user);
+ 
+        if(!user){
+            throw new apierror(404,"Invalid Refresh Token");
+        }
+ 
+        if(user.refreshToken !== incomingrefreshToken){
+            throw new apierror(401,"REFRESH TOKEN EXPIRED");
+        }
+ 
+        const options = {
+            httpOnly:true,
+            secure:true
+        }
+ 
+        const {refreshToken,accessToken} = await generateRefreshTokenandaccesstoken(user._id);
+        // console.log(refreshToken,accessToken);
+        return res
+        .status(200)
+        .cookie("refreshToken",refreshToken,options)
+        .cookie("accessToken",accessToken,options)
+        .json(new ApiResponse(200,"Token Refreshed successfully"));
+ 
+    }catch (error) {
+        throw new apierror(401,error?.message || "Unauthorized Request");
+    }
+});
+
+export { register,loginuser,logoutuser,refreshToken };  
